@@ -586,6 +586,9 @@ class Icelandic_Jobs_Translator_Pro {
 		}
 
 		$dom = new DOMDocument();
+		$dom->preserveWhiteSpace = false;
+		$dom->formatOutput = true;
+		
 		if (!$dom->load($file_path)) {
 			$this->log("Failed to load XML file for expiration check: $file_path");
 			return;
@@ -595,41 +598,71 @@ class Icelandic_Jobs_Translator_Pro {
 		$jobs = $xpath->query("/jobs/job");
 		$current_date = new DateTime();
 		$deleted_count = 0;
+		$jobs_to_delete = [];
 
 		foreach ($jobs as $job) {
 			$deadline_node = $xpath->query("application_deadline_to", $job)->item(0);
-			if (!$deadline_node) {
-				continue;
-			}
+			if (!$deadline_node) continue;
 
 			$deadline_str = trim($deadline_node->nodeValue);
-			if (empty($deadline_str)) {
-				continue;
-			}
+			if (empty($deadline_str)) continue;
 
 			try {
-				// Parse Icelandic date format (DD.MM.YYYY)
 				$deadline_date = DateTime::createFromFormat('d.m.Y', $deadline_str);
-				if (!$deadline_date) {
-					$this->log("Invalid date format for job: " . $xpath->query("job_id", $job)->item(0)->nodeValue);
-					continue;
-				}
+				if (!$deadline_date) continue;
 
 				if ($current_date > $deadline_date) {
 					$job_id = $xpath->query("job_id", $job)->item(0)->nodeValue;
+					$jobs_to_delete[] = $job_id;
 					$job->parentNode->removeChild($job);
 					$deleted_count++;
-					$this->log("Removed expired job ID: $job_id (deadline: $deadline_str)");
+					$this->log("Marked for removal - job ID: $job_id (deadline: $deadline_str)");
 				}
 			} catch (Exception $e) {
 				$this->log("Error processing date for job: " . $e->getMessage());
-				continue;
 			}
 		}
 
 		if ($deleted_count > 0) {
-			$dom->save($file_path);
-			$this->log("Removed $deleted_count expired jobs from XML");
+			// Debug: Verify DOM state before saving
+			$remaining_jobs = $xpath->query("/jobs/job");
+			$this->log(sprintf(
+				"DEBUG - Before save: %d jobs marked for deletion, %d jobs remaining in DOM",
+				$deleted_count,
+				$remaining_jobs->length
+			));
+			
+			// Debug: List remaining job IDs in DOM
+			$remaining_ids = [];
+			foreach ($remaining_jobs as $job) {
+				$remaining_ids[] = $xpath->query("job_id", $job)->item(0)->nodeValue;
+			}
+			$this->log("DEBUG - Remaining job IDs: " . implode(', ', $remaining_ids));
+			
+			// Debug: Verify jobs to delete aren't in remaining list
+			$still_exists = array_intersect($jobs_to_delete, $remaining_ids);
+			if (!empty($still_exists)) {
+				$this->log("ERROR - These jobs were not removed from DOM: " . implode(', ', $still_exists));
+			}
+
+			// Attempt to save
+			if ($dom->save($file_path)) {
+				$this->log("Successfully saved XML after removing $deleted_count jobs");
+				
+				// Post-save verification
+				$post_save_dom = new DOMDocument();
+				if ($post_save_dom->load($file_path)) {
+					$post_xpath = new DOMXPath($post_save_dom);
+					$post_save_count = $post_xpath->query("/jobs/job")->length;
+					$this->log("DEBUG - Post-save verification: $post_save_count jobs in file");
+					
+					if ($post_save_count != $remaining_jobs->length) {
+						$this->log("ERROR - Job count mismatch! DOM had {$remaining_jobs->length} jobs, file now has $post_save_count");
+					}
+				}
+			} else {
+				$this->log("ERROR - Failed to save XML file");
+			}
 		} else {
 			$this->log("No expired jobs found to remove");
 		}
