@@ -2,7 +2,7 @@
 /*
 Plugin Name: Icelandic Medical Jobs Translator Pro
 Description: Translates Icelandic medical jobs with GPT-4, from external xml to local xml.
-Version: 3.2
+Version: 3.3
 Author: Deepak Chhabra
 */
 if ( ! defined( 'ABSPATH' ) ) {
