@@ -351,7 +351,10 @@ class Icelandic_Jobs_Translator_Pro {
         
         update_option('ijt_last_processed', time());
 		$this->log("Already translated jobs skipped: $jobs_translated");
-		$this->log("Total jobs processed: $jobs_processed");		
+		$this->log("Total jobs processed: $jobs_processed");
+		// cleanup translated xml file.
+		$this->log('Running expired jobs cleanup...');
+		$this->delete_expired_jobs();		
         $this->log('===== DAILY PROCESSING COMPLETE =====');
     }
 
@@ -574,7 +577,63 @@ class Icelandic_Jobs_Translator_Pro {
 		return $job_ids;
 	}
 
+	private function delete_expired_jobs() {
+		$file_path = $this->translated_file;
+		
+		if (!file_exists($file_path)) {
+			$this->log("No translated XML file found to check for expired jobs");
+			return;
+		}
 
+		$dom = new DOMDocument();
+		if (!$dom->load($file_path)) {
+			$this->log("Failed to load XML file for expiration check: $file_path");
+			return;
+		}
+
+		$xpath = new DOMXPath($dom);
+		$jobs = $xpath->query("/jobs/job");
+		$current_date = new DateTime();
+		$deleted_count = 0;
+
+		foreach ($jobs as $job) {
+			$deadline_node = $xpath->query("application_deadline_to", $job)->item(0);
+			if (!$deadline_node) {
+				continue;
+			}
+
+			$deadline_str = trim($deadline_node->nodeValue);
+			if (empty($deadline_str)) {
+				continue;
+			}
+
+			try {
+				// Parse Icelandic date format (DD.MM.YYYY)
+				$deadline_date = DateTime::createFromFormat('d.m.Y', $deadline_str);
+				if (!$deadline_date) {
+					$this->log("Invalid date format for job: " . $xpath->query("job_id", $job)->item(0)->nodeValue);
+					continue;
+				}
+
+				if ($current_date > $deadline_date) {
+					$job_id = $xpath->query("job_id", $job)->item(0)->nodeValue;
+					$job->parentNode->removeChild($job);
+					$deleted_count++;
+					$this->log("Removed expired job ID: $job_id (deadline: $deadline_str)");
+				}
+			} catch (Exception $e) {
+				$this->log("Error processing date for job: " . $e->getMessage());
+				continue;
+			}
+		}
+
+		if ($deleted_count > 0) {
+			$dom->save($file_path);
+			$this->log("Removed $deleted_count expired jobs from XML");
+		} else {
+			$this->log("No expired jobs found to remove");
+		}
+	}
 
     private function get_translated_file_url() {
         $upload_dir = wp_upload_dir();
